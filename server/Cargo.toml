@@ -1,0 +1,56 @@
+[package]
+name = "monero-crawler-server"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "monero_crawler_server_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "monero-crawler-server"
+path = "src/main.rs"
+[dependencies]
+# Clients API
+reqwest = {version="0.12", default-features=false}
+
+# configuration file
+get_pass = {git = "https://github.com/Cyrix126/get_pass"}
+confy = "0.6"
+serde = { version = "1", features = ["derive"] }
+directories = "6.0"
+# Server
+tokio = {version="1", default-features=false, features= ["rt-multi-thread", "sync"] }
+axum = {version="0.7", default-features= false, features= ["tokio", "http2", "json", "macros"] }
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+# Error
+thiserror = "1.0"
+axum_thiserror = "0.1"
+anyhow = "1.0"
+# response, either json (slower, more compatible) or bitcode (faster, rust client)
+#bitcode = {version="0.6", features=["serde"]}
+url = {version="2.5", features=["serde"]}
+# Miscs
+derive_more = {version="0.99", default-features=false, features=["display"]}
+enclose = "1.2"
+cfg-if ="1.0"
+strum = "0.26"
+strum_macros = "0.26"
+
+# DB
+diesel = { version = "2.2", features = ["sqlite"] }
+dotenv = "0.15"
+diesel_migrations = {version="2.2", features=["sqlite"]}
+deadpool-diesel = {version="0.6", features=["sqlite"]}
+chrono = "0.4"
+
+# Crawling
+cuprate-levin = { git = "https://github.com/Cuprate/cuprate" }
+
+[dev-dependencies]
+axum-test = "16.3"
+
+[features]
+default=[]
