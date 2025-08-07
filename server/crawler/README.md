@@ -62,7 +62,7 @@ cargo doc --open
 ### Donations
 If you'd like to thank me for the development of monero-crawler-rs and/or motivate me to improve it you're welcome to send any amount of XMR to the following address:
 
-![QR CODE DONATION ADDRESS](assets/donation_qr.png)
+![QR CODE DONATION ADDRESS](../../assets/donation_qr.png)
 ```
 4AGJScWSv45E28pmwck9YRP21KuwGx6fuMYV9kTxXFnWEij5FVEUyccBs7ExDy419DJXRPw3u57TH5BaGbsHTdnf6SvY5p5
 ```
