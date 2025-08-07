@@ -20,6 +20,7 @@ Gather data about peers in the monero network in an efficient way
 
 ```
 cargo add --git https://github.com/Cyrix126/monero-crawler-rs monero-crawler-lib
+```
 
 ## Usage
 
@@ -30,6 +31,10 @@ See the documentation for the settable fields to customize the behavior of the c
 ## Example
 
 See the [example](./examples/crawl.rs) that crawl the network to return p2pool compatible nodes.
+
+```
+cargo run --release --example crawl
+```
 
 ## Bug Reporting
 
