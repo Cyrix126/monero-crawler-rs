@@ -38,7 +38,7 @@ cargo run --release --example crawl
 
 ## Bug Reporting
 
-Open an [issue](https://github.com/Cyrix126/monero-crawler-rs/issue) or contact me by email through [email](mailto:gupaxx@baermail.fr)
+Open an [issue](https://github.com/Cyrix126/monero-crawler-rs/issues) or contact me by email through [email](mailto:gupaxx@baermail.fr)
 
 ## Contributing
 
