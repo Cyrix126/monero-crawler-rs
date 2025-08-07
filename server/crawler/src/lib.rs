@@ -361,7 +361,7 @@ async fn is_latency_capable(
     max: u32,
 ) -> Option<u32> {
     let now = Instant::now();
-    if let Ok(_) = timeout(timeout_duration, tokio::net::TcpStream::connect(socket)).await {
+    if (timeout(timeout_duration, tokio::net::TcpStream::connect(socket)).await).is_ok() {
         let ms = now.elapsed().as_millis() as u32;
         if ms <= max {
             return Some(ms);
