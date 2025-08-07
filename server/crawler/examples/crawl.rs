@@ -15,6 +15,7 @@ async fn main() {
         .unwrap();
     let crawler = CrawlBuilder::default()
         .capabilities(vec![
+            CapabilitiesChecker::Latency(100),
             CapabilitiesChecker::Rpc(RPC_PORTS.to_vec()),
             CapabilitiesChecker::Zmq(ZMQ_PORTS.to_vec()),
             CapabilitiesChecker::SpyNode(false, vec![]),

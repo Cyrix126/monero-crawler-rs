@@ -45,7 +45,7 @@ type ConnectorService = Connector<
 static CONNECTOR: OnceLock<ConnectorService> = OnceLock::new();
 static SCANNED_NODES: LazyLock<DashSet<SocketAddr>> = LazyLock::new(DashSet::new);
 static PEERS_CHANNEL: OnceLock<
-    mpsc::Sender<(SocketAddr, cuprate_p2p_core::client::Client<ClearNet>, u32)>,
+    mpsc::Sender<(SocketAddr, cuprate_p2p_core::client::Client<ClearNet>)>,
 > = OnceLock::new();
 
 #[derive(Builder)]
@@ -92,7 +92,7 @@ pub enum CapabilitiesChecker {
 impl Crawl {
     /// Will return only peers that checks capabilities
     /// The return is peer address, rpc port, zmq port, latency
-    /// If the zmq or rpc capability is not used, ports will be to value 0
+    /// If the zmq or rpc or latency capability is not used, value will be set to 0
     pub async fn discover_peers(&self) -> impl Stream<Item = (SocketAddr, u16, u16, u32)> {
         let (capable_peers_tx, capable_peers_rx) = mpsc::channel(508);
         let handshaker = HandshakerBuilder::<ClearNet>::new(BasicNodeData {
@@ -132,15 +132,18 @@ impl Crawl {
                     connections_limit.clone(),
                 ));
             });
-            while let Some((socket, mut peer, ms)) = peers_rx.recv().await {
+            while let Some((socket, mut peer)) = peers_rx.recv().await {
                 tokio::spawn(
                     enc!((capable_peers_tx, capabilities, timeout_duration, client) async move {
                         let mut rpc_port = 0;
                         let mut zmq_port = 0;
+                        let mut latency = 0;
                         for capability in capabilities.iter() {
                             match capability {
-                                CapabilitiesChecker::Latency(max) => if !is_latency_capable(max.to_owned(), ms) {
-                                                                return;
+                                CapabilitiesChecker::Latency(max) => if let Some(ms) = is_latency_capable(socket, timeout_duration, *max).await {
+                                                                latency = ms;
+                                } else {
+                                    return;
                                 }
                                 #[cfg(feature = "rpc")]
                                 CapabilitiesChecker::Rpc(ports) => {
@@ -166,7 +169,7 @@ impl Crawl {
                                 }
                             }
                         }
-                            capable_peers_tx.send((socket, rpc_port, zmq_port, ms)).await.unwrap();
+                            capable_peers_tx.send((socket, rpc_port, zmq_port, latency)).await.unwrap();
                     }),
                 );
             }
@@ -352,8 +355,19 @@ async fn zmq_check(socket_peer: SocketAddr, timeout_duration: Duration) -> bool 
     false
 }
 
-fn is_latency_capable(max: u32, ms: u32) -> bool {
-    ms <= max
+async fn is_latency_capable(
+    socket: SocketAddr,
+    timeout_duration: Duration,
+    max: u32,
+) -> Option<u32> {
+    let now = Instant::now();
+    if let Ok(_) = timeout(timeout_duration, tokio::net::TcpStream::connect(socket)).await {
+        let ms = now.elapsed().as_millis() as u32;
+        if ms <= max {
+            return Some(ms);
+        }
+    }
+    None
 }
 
 async fn request_book_node(
@@ -363,7 +377,6 @@ async fn request_book_node(
 ) -> Result<(), tower::BoxError> {
     let _guard = connection_limit.acquire().await.unwrap();
     let mut connector = CONNECTOR.get().unwrap().clone();
-    let now = Instant::now();
     let peer = timeout(
         timeout_duration,
         connector
@@ -372,12 +385,7 @@ async fn request_book_node(
             .call(ConnectRequest { addr, permit: None }),
     )
     .await??;
-    let ms = now.elapsed().as_millis();
-    PEERS_CHANNEL
-        .get()
-        .unwrap()
-        .send((addr, peer, ms as u32))
-        .await?;
+    PEERS_CHANNEL.get().unwrap().send((addr, peer)).await?;
     Ok(())
 }
 
