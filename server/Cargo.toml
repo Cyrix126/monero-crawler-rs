@@ -2,6 +2,7 @@
 name = "monero-crawler-server"
 version = "0.1.0"
 edition = "2024"
+license = "GPL-3.0"
 
 [lib]
 name = "monero_crawler_server_lib"
@@ -41,7 +42,7 @@ strum_macros = "0.26"
 
 # DB
 diesel = { version = "2.2", features = ["sqlite"] }
-dotenv = "0.15"
+dotenvy = "0.15"
 diesel_migrations = {version="2.2", features=["sqlite"]}
 deadpool-diesel = {version="0.6", features=["sqlite"]}
 chrono = "0.4"

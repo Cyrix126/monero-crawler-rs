@@ -2,6 +2,7 @@
 name = "monero-crawler-client"
 version = "0.1.0"
 edition = "2024"
+license = "GPL-3.0"
 
 [dependencies]
 monero-crawler-common = {path = "../common", features=["client"]}
