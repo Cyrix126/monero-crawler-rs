@@ -1,4 +1,5 @@
-use cuprate_wire::CoreSyncData;
+use cuprate_p2p_core::{PeerRequest, PeerResponse};
+use cuprate_wire::{AdminRequestMessage, AdminResponseMessage, CoreSyncData};
 use dashmap::DashSet;
 use derive_builder::Builder;
 use enclose::enc;
@@ -81,6 +82,11 @@ pub enum CapabilitiesChecker {
     #[cfg(feature = "zmq")]
     Zmq(Vec<u16>),
     ChainSynced(Arc<Mutex<u64>>),
+    // true: only spy nodes
+    // false, exclude spy nodes
+    // If a vec is empty, detect manually if the peer is a spy node.
+    // If
+    SpyNode(bool, Vec<SocketAddr>),
 }
 
 impl Crawl {
@@ -126,7 +132,7 @@ impl Crawl {
                     connections_limit.clone(),
                 ));
             });
-            while let Some((socket, peer, ms)) = peers_rx.recv().await {
+            while let Some((socket, mut peer, ms)) = peers_rx.recv().await {
                 tokio::spawn(
                     enc!((capable_peers_tx, capabilities, timeout_duration, client) async move {
                         let mut rpc_port = 0;
@@ -150,8 +156,13 @@ impl Crawl {
                                 } else {
                                     return;
                                 }
-                                CapabilitiesChecker::ChainSynced(chain_height) => if !is_blockchain_synced(peer.info.core_sync_data.clone(), chain_height.clone()).await {
+                                CapabilitiesChecker::ChainSynced(chain_height) => {
+                                    if !is_blockchain_synced(&peer.info.core_sync_data, chain_height.clone()).await {
                                     return;
+                                }
+                                    }
+                                CapabilitiesChecker::SpyNode(keep_only_spynode, blacklist) => if !is_spynode(&mut peer, socket, blacklist).await.is_ok_and(|r|r) && *keep_only_spynode {
+                                        return;
                                 }
                             }
                         }
@@ -166,10 +177,55 @@ impl Crawl {
     }
 }
 
+async fn is_spynode(
+    peer: &mut cuprate_p2p_core::client::Client<ClearNet>,
+    socket: SocketAddr,
+    blacklist: &[SocketAddr],
+) -> Result<bool, tower::BoxError> {
+    // if a list is given, check it only, do not check the peer manually
+    if !blacklist.is_empty() {
+        if blacklist.contains(&socket) {
+            return Ok(true);
+        } else {
+            return Ok(false);
+        }
+    }
+    let PeerResponse::Admin(AdminResponseMessage::Ping(ping)) = peer
+        .ready()
+        .await?
+        .call(PeerRequest::Admin(AdminRequestMessage::Ping))
+        .await?
+    else {
+        return Ok(false);
+    };
+
+    let PeerResponse::Admin(AdminResponseMessage::Ping(ping_2)) = peer
+        .ready()
+        .await?
+        .call(PeerRequest::Admin(AdminRequestMessage::Ping))
+        .await?
+    else {
+        return Ok(false);
+    };
+
+    let PeerResponse::Admin(AdminResponseMessage::Ping(ping_3)) = peer
+        .ready()
+        .await?
+        .call(PeerRequest::Admin(AdminRequestMessage::Ping))
+        .await?
+    else {
+        return Ok(false);
+    };
+
+    Ok(peer.info.basic_node_data.peer_id != ping.peer_id
+        || ping.peer_id != ping_2.peer_id
+        || ping_2.peer_id != ping_3.peer_id)
+}
+
 /// We don't know the current height of the network, so it needs to be given from an outside source.
 /// Since the current height of the network can change, it is wrapped into an arc mutex
 async fn is_blockchain_synced(
-    core_sync_data: Arc<Mutex<CoreSyncData>>,
+    core_sync_data: &Arc<Mutex<CoreSyncData>>,
     height: Arc<Mutex<u64>>,
 ) -> bool {
     core_sync_data.lock().unwrap().current_height >= *height.lock().unwrap()

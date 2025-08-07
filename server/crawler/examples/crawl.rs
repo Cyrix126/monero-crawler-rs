@@ -1,7 +1,7 @@
 use std::{fs::OpenOptions, io::Write};
 
 use futures::StreamExt;
-use monero_crawler::{CapabilitiesChecker, CrawlBuilder};
+use monero_crawler_lib::{CapabilitiesChecker, CrawlBuilder};
 
 const ZMQ_PORTS: [u16; 2] = [18083, 18084];
 const RPC_PORTS: [u16; 2] = [18081, 18089];
@@ -17,6 +17,7 @@ async fn main() {
         .capabilities(vec![
             CapabilitiesChecker::Rpc(RPC_PORTS.to_vec()),
             CapabilitiesChecker::Zmq(ZMQ_PORTS.to_vec()),
+            CapabilitiesChecker::SpyNode(false, vec![]),
         ])
         .build()
         .unwrap();
