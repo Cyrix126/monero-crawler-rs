@@ -123,7 +123,9 @@ impl Crawl {
             // the buffer is max the number of peers to store in memory without being yield.
             let (peers_tx, mut peers_rx) = mpsc::channel(508);
 
-            PEERS_CHANNEL.set(peers_tx).unwrap();
+            // set only if it is not already by not checking the error
+            // This will happen if the discover_peers is ran multiple times
+            let _ = PEERS_CHANNEL.set(peers_tx);
 
             seeds.iter().for_each(|peer| {
                 tokio::spawn(request_book_node(
