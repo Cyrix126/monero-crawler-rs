@@ -1,3 +1,4 @@
+use cuprate_p2p_core::transports::Tcp;
 use cuprate_p2p_core::{PeerRequest, PeerResponse};
 use cuprate_wire::{AdminRequestMessage, AdminResponseMessage, CoreSyncData};
 use dashmap::DashSet;
@@ -37,6 +38,7 @@ pub mod seeds;
 
 type ConnectorService = Connector<
     ClearNet,
+    Tcp,
     AddressBookService,
     DummyCoreSyncSvc,
     MapErr<Shared<DummyProtocolRequestHandler>, fn(Infallible) -> tower::BoxError>,
@@ -95,14 +97,17 @@ impl Crawl {
     /// If the zmq or rpc or latency capability is not used, value will be set to 0
     pub async fn discover_peers(&self) -> impl Stream<Item = (SocketAddr, u16, u16, u32)> {
         let (capable_peers_tx, capable_peers_rx) = mpsc::channel(508);
-        let handshaker = HandshakerBuilder::<ClearNet>::new(BasicNodeData {
-            my_port: 0,
-            network_id: self.chainnet.network_id(),
-            peer_id: rand::random(),
-            support_flags: PeerSupportFlags::FLUFFY_BLOCKS,
-            rpc_port: 0,
-            rpc_credits_per_hash: 0,
-        })
+        let handshaker = HandshakerBuilder::<ClearNet, Tcp>::new(
+            BasicNodeData {
+                my_port: 0,
+                network_id: self.chainnet.network_id(),
+                peer_id: rand::random(),
+                support_flags: PeerSupportFlags::FLUFFY_BLOCKS,
+                rpc_port: 0,
+                rpc_credits_per_hash: 0,
+            },
+            (),
+        )
         .with_address_book(AddressBookService {
             timeout: self.timeout_duration,
             connections_limit: self.connections_limit.clone(),
@@ -411,7 +416,7 @@ impl Service<AddressBookRequest<ClearNet>> for AddressBookService {
         let connections_limit = &self.connections_limit;
         enc!((duration, connections_limit) async move {
             match req {
-                AddressBookRequest::IncomingPeerList(peers) => {
+                AddressBookRequest::IncomingPeerList(_, peers) => {
                     for mut peer in peers {
                         peer.adr.make_canonical();
                         if SCANNED_NODES.insert(peer.adr) {

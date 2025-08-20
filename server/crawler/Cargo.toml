@@ -12,8 +12,8 @@ path = "src/lib.rs"
 tokio = {version = "1.40", features = ["macros", "rt-multi-thread"]}
 tokio-stream = {version = "0.1", default-features=false}
 tower = { git = "https://github.com/Cuprate/tower.git", rev = "6c7faf0", default-features = false } # <https://github.com/tower-rs/tower/pull/796>
-cuprate-p2p-core = { git = "https://github.com/Cuprate/cuprate.git", branch = "expose-support-flags" }
-cuprate-wire = { git = "https://github.com/Cuprate/cuprate.git", branch = "expose-support-flags" }
+cuprate-p2p-core = { git = "https://github.com/Cuprate/cuprate.git", branch = "expose-support-flags2" }
+cuprate-wire = { git = "https://github.com/Cuprate/cuprate.git", branch = "expose-support-flags2" }
 futures = "0.3.31"
 rand = "0.9.0-beta.1"
 dashmap = "6.1.0"
