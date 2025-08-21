@@ -135,12 +135,14 @@ impl Crawl {
                 let _ = CONNECTOR.get_or_init(|| connector);
 
                 seeds.iter().for_each(|peer| {
+                        if SCANNED_NODES.insert(*peer) {
                     tokio::spawn(enc!((peers_tx_arc, connections_limit) request_book_node(
                         *peer,
                         timeout_duration,
                         connections_limit,
                         peers_tx_arc
                     )));
+                    }
                 });
                 while let Some((socket, mut peer)) = peers_rx.recv().await {
                     tokio::spawn(
