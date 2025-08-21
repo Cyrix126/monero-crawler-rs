@@ -36,6 +36,8 @@ use cuprate_p2p_core::{
 };
 use cuprate_wire::{BasicNodeData, common::PeerSupportFlags};
 
+use crate::seeds::SEED_NODES;
+
 pub mod seeds;
 
 type ConnectorService = Connector<
@@ -86,8 +88,9 @@ pub enum CapabilitiesChecker {
     // true: only spy nodes
     // false, exclude spy nodes
     // If a vec is empty, detect manually if the peer is a spy node.
-    // If
     SpyNode(bool, Vec<SocketAddr>),
+    // Return only seed nodes or exclude them
+    SeedNode(bool),
 }
 
 impl Crawl {
@@ -150,6 +153,13 @@ impl Crawl {
                                     CapabilitiesChecker::Latency(max) => if let Some(ms) = is_latency_capable(socket, timeout_duration, *max).await {
                                                                     latency = ms;
                                     } else {
+                                        return;
+                                    }
+                                    CapabilitiesChecker::SeedNode(keep_seed) => if SEED_NODES.contains(&socket) {
+                                        if !keep_seed {
+                                            return;
+                                        }
+                                    } else if *keep_seed {
                                         return;
                                     }
                                     #[cfg(feature = "rpc")]

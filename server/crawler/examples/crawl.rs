@@ -19,6 +19,7 @@ async fn main() {
             CapabilitiesChecker::Rpc(RPC_PORTS.to_vec()),
             CapabilitiesChecker::Zmq(ZMQ_PORTS.to_vec()),
             CapabilitiesChecker::SpyNode(false, vec![]),
+            CapabilitiesChecker::SeedNode(false),
         ])
         .build()
         .unwrap();
