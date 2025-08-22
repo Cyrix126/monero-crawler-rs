@@ -1,6 +1,6 @@
 [package]
 name = "monero-crawler-lib"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "GPL-3.0"
 
@@ -9,18 +9,18 @@ name = "monero_crawler_lib"
 path = "src/lib.rs"
 
 [dependencies]
-tokio = {version = "1.40", features = ["macros", "rt-multi-thread"]}
+tokio = {version = "1.47", features = ["macros", "rt-multi-thread"]}
 tokio-stream = {version = "0.1", default-features=false}
 tokio-util = "0.7"
 cuprate-p2p-core = { git = "https://github.com/Cuprate/cuprate.git" }
 cuprate-wire = { git = "https://github.com/Cuprate/cuprate.git" }
 futures = "0.3.31"
-rand = "0.9.0-beta.1"
+rand = "0.9.2"
 dashmap = "6.1.0"
 enclose = {version="1.2.1"}
 derive_builder = "0.20"
 
-reqwest = {version = "0.12.22", default-features=false, features=["json", "rustls-tls"], optional=true}
+reqwest = {version = "0.12.23", default-features=false, features=["json", "rustls-tls"], optional=true}
 zeromq = {version="0.5.0-pre", optional=true} 
 
 [dev-dependencies]
