@@ -1,21 +1,13 @@
-use cuprate_p2p_core::client::Client;
-use cuprate_p2p_core::transports::Tcp;
-use cuprate_p2p_core::{PeerRequest, PeerResponse};
-use cuprate_wire::{AdminRequestMessage, AdminResponseMessage, CoreSyncData};
+use cuprate_wire::admin::HandshakeResponse;
+use cuprate_wire::{CoreSyncData, MoneroWireCodec, NetworkAddress};
 use dashmap::DashSet;
 use derive_builder::Builder;
 use enclose::enc;
-use futures::{FutureExt, future::BoxFuture, stream};
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
-use std::{
-    convert::Infallible,
-    sync::{LazyLock, OnceLock},
-    task::Poll,
-    time::Duration,
-};
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::spawn;
 use tokio::sync::mpsc::Sender;
 use tokio::{
@@ -23,33 +15,24 @@ use tokio::{
     time::timeout,
 };
 use tokio_stream::wrappers::ReceiverStream;
-use tower::{Service, ServiceExt, make::Shared, util::MapErr};
-use zeromq::{Socket, ZmqError};
 
-use cuprate_p2p_core::{
-    BroadcastMessage, ClearNet, NetZoneAddress, Network, NetworkZone,
-    client::{
-        ConnectRequest, Connector, HandshakerBuilder, InternalPeerID,
-        handshaker::builder::{DummyCoreSyncSvc, DummyProtocolRequestHandler},
-    },
-    services::{AddressBookRequest, AddressBookResponse},
-};
+use cuprate_p2p_core::Network;
 use cuprate_wire::{BasicNodeData, common::PeerSupportFlags};
 
+use crate::capability_checkers::{
+    CapabilitiesChecker, is_blockchain_synced, is_latency_capable, is_rpc_capable, is_spynode,
+    is_zmq_capable,
+};
+use crate::peer_requests::fetch_peer;
 use crate::seeds::SEED_NODES;
 
+pub mod capability_checkers;
+mod peer_requests;
 pub mod seeds;
 
-type ConnectorService = Connector<
-    ClearNet,
-    Tcp,
-    AddressBookService,
-    DummyCoreSyncSvc,
-    MapErr<Shared<DummyProtocolRequestHandler>, fn(Infallible) -> tower::BoxError>,
-    fn(InternalPeerID<<ClearNet as NetworkZone>::Addr>) -> stream::Pending<BroadcastMessage>,
->;
-static CONNECTOR: OnceLock<ConnectorService> = OnceLock::new();
-static SCANNED_NODES: LazyLock<DashSet<SocketAddr>> = LazyLock::new(DashSet::new);
+use tokio_util::codec::{FramedRead, FramedWrite};
+type PeerStream = FramedRead<OwnedReadHalf, MoneroWireCodec>;
+type PeerSink = FramedWrite<OwnedWriteHalf, MoneroWireCodec>;
 
 #[derive(Builder)]
 #[builder(pattern = "immutable")]
@@ -75,24 +58,6 @@ impl CrawlBuilder {
     }
 }
 
-/// array of u16 represent ports on which at least one is able to support the service
-#[derive(Clone)]
-pub enum CapabilitiesChecker {
-    Latency(u32),
-    // the list of ports to scan for rpc. If the list is empty, the only port used to check if rpc is enabled on peer is the port advertised through p2p
-    #[cfg(feature = "rpc")]
-    Rpc(Vec<u16>),
-    #[cfg(feature = "zmq")]
-    Zmq(Vec<u16>),
-    ChainSynced(Arc<Mutex<u64>>),
-    // true: only spy nodes
-    // false, exclude spy nodes
-    // If a vec is empty, detect manually if the peer is a spy node.
-    SpyNode(bool, Vec<SocketAddr>),
-    // Return only seed nodes or exclude them
-    SeedNode(bool),
-}
-
 impl Crawl {
     /// Will return only peers that checks capabilities
     /// The return is peer address, rpc port, zmq port, latency
@@ -103,48 +68,31 @@ impl Crawl {
         let capabilities = &self.capabilities;
         let client = &self.client;
         let timeout_duration = self.timeout_duration;
-        let seeds = &self.seeds;
         let connections_limit = &self.connections_limit;
         let chainnet = self.chainnet;
+        let addrs = self.seeds.clone();
         spawn(
-            enc!((capable_peers_tx, capabilities, timeout_duration, client, seeds, connections_limit) async move {
+            enc!((capable_peers_tx, capabilities, timeout_duration, client, connections_limit) async move {
                 // the buffer is max the number of peers to store in memory without being yield.
-            let (peers_tx, mut peers_rx) = mpsc::channel(508);
+            let (peers_tx, mut peers_rx) = mpsc::channel::<(SocketAddr, HandshakeResponse)>(508);
             let peers_tx_arc = Arc::new(peers_tx);
-
-            SCANNED_NODES.clear();
-            let handshaker = HandshakerBuilder::<ClearNet, Tcp>::new(
-                BasicNodeData {
+            let scanned_nodes = Arc::new(DashSet::new());
+                let basic_node_date = BasicNodeData {
                     my_port: 0,
                     network_id: chainnet.network_id(),
                     peer_id: rand::random(),
                     support_flags: PeerSupportFlags::FLUFFY_BLOCKS,
                     rpc_port: 0,
                     rpc_credits_per_hash: 0,
-                },
-                (),
-            )
-            .with_address_book(AddressBookService {
-                timeout: timeout_duration,
-                connections_limit: connections_limit.clone(),
-                peers_channel: peers_tx_arc.clone()
-            })
-            .build();
-                let connector = Connector::new(handshaker);
+                };
+                let core_sync_data = CoreSyncData::new(u128::default(), u64::default() , u32::default(), [0; 32], u8::default());
 
-                let _ = CONNECTOR.get_or_init(|| connector);
 
-                seeds.iter().for_each(|peer| {
-                        if SCANNED_NODES.insert(*peer) {
-                    tokio::spawn(enc!((peers_tx_arc, connections_limit) request_book_node(
-                        *peer,
-                        timeout_duration,
-                        connections_limit,
-                        peers_tx_arc
-                    )));
-                    }
-                });
-                while let Some((socket, mut peer)) = peers_rx.recv().await {
+
+
+
+                            crawl_peers(addrs, timeout_duration, connections_limit,  peers_tx_arc, scanned_nodes, core_sync_data, basic_node_date);
+                while let Some((socket, peer)) = peers_rx.recv().await {
                     tokio::spawn(
                         enc!((capable_peers_tx, capabilities, timeout_duration, client) async move {
                             let mut rpc_port = 0;
@@ -166,7 +114,7 @@ impl Crawl {
                                     }
                                     #[cfg(feature = "rpc")]
                                     CapabilitiesChecker::Rpc(ports) => {
-                                        if let Some(port) = is_rpc_capable(socket, peer.info.basic_node_data.rpc_port, ports, timeout_duration, &client).await {
+                                        if let Some(port) = is_rpc_capable(socket, peer.node_data.rpc_port, ports, timeout_duration, &client).await {
                                             rpc_port = port;
                                     } else {
                                         return;
@@ -179,11 +127,11 @@ impl Crawl {
                                         return;
                                     }
                                     CapabilitiesChecker::ChainSynced(chain_height) => {
-                                        if !is_blockchain_synced(&peer.info.core_sync_data, chain_height.clone()).await {
+                                        if !is_blockchain_synced(&peer.payload_data, chain_height.clone()).await {
                                         return;
                                     }
                                         }
-                                    CapabilitiesChecker::SpyNode(keep_only_spynode, blacklist) => if !is_spynode(&mut peer, socket, blacklist).await.is_ok_and(|r|r) && *keep_only_spynode {
+                                    CapabilitiesChecker::SpyNode(keep_only_spynode, blacklist) => if !is_spynode(&socket, &peer,  blacklist).await.is_some_and(|r|r)  && *keep_only_spynode {
                                             return;
                                     }
                                 }
@@ -199,257 +147,58 @@ impl Crawl {
     }
 }
 
-async fn is_spynode(
-    peer: &mut cuprate_p2p_core::client::Client<ClearNet>,
-    socket: SocketAddr,
-    blacklist: &[SocketAddr],
-) -> Result<bool, tower::BoxError> {
-    // if a list is given, check it only, do not check the peer manually
-    if !blacklist.is_empty() {
-        if blacklist.contains(&socket) {
-            return Ok(true);
-        } else {
-            return Ok(false);
-        }
-    }
-    let PeerResponse::Admin(AdminResponseMessage::Ping(ping)) = peer
-        .ready()
-        .await?
-        .call(PeerRequest::Admin(AdminRequestMessage::Ping))
-        .await?
-    else {
-        return Ok(false);
-    };
-
-    let PeerResponse::Admin(AdminResponseMessage::Ping(ping_2)) = peer
-        .ready()
-        .await?
-        .call(PeerRequest::Admin(AdminRequestMessage::Ping))
-        .await?
-    else {
-        return Ok(false);
-    };
-
-    let PeerResponse::Admin(AdminResponseMessage::Ping(ping_3)) = peer
-        .ready()
-        .await?
-        .call(PeerRequest::Admin(AdminRequestMessage::Ping))
-        .await?
-    else {
-        return Ok(false);
-    };
-
-    Ok(peer.info.basic_node_data.peer_id != ping.peer_id
-        || ping.peer_id != ping_2.peer_id
-        || ping_2.peer_id != ping_3.peer_id)
-}
-
-/// We don't know the current height of the network, so it needs to be given from an outside source.
-/// Since the current height of the network can change, it is wrapped into an arc mutex
-async fn is_blockchain_synced(
-    core_sync_data: &Arc<Mutex<CoreSyncData>>,
-    height: Arc<Mutex<u64>>,
-) -> bool {
-    core_sync_data.lock().unwrap().current_height >= *height.lock().unwrap()
-}
-/// Will return opened ports, will stop scanning when one is found and still in the buffer.
-async fn check_ports(
-    peer: SocketAddr,
-    ports: &[u16],
-    timeout_duration: Duration,
-) -> impl Stream<Item = u16> {
-    let (open_ports_tx, open_ports_rx) = mpsc::channel(1);
-    for port in ports {
-        tokio::spawn(enc!((open_ports_tx, port) async move {
-            let mut socket_addr_peer = peer;
-            socket_addr_peer.set_port(port);
-            if timeout(
-                timeout_duration,
-                tokio::net::TcpStream::connect(socket_addr_peer),
-            )
-            .await
-            .is_ok_and(|r| r.is_ok())
-            {
-                let _ = open_ports_tx.send(port).await;
-            }
-        }));
-    }
-    ReceiverStream::new(open_ports_rx)
-}
-/// The port is checked before sending a request to verify that the service is responding
-/// Even if multiple ports are opened
-/// port is advertized if monerod was launched with --public-node argument. A rpc enabled node can exist without this argument.
-/// returns the port in either case
-async fn is_rpc_capable(
-    addr: SocketAddr,
-    port_advertized: u16,
-    ports: &[u16],
-    timeout_duration: Duration,
-    client: &reqwest::Client,
-) -> Option<u16> {
-    let mut socket_addr_peer = addr;
-    // port advertized is checked first
-    if port_advertized != 0 {
-        // we check the rpc service without checking if the port open, as it should be opened in most case if it was advertised by the peer.
-        // If the port is not opened, the check will just fail with the timeout
-        socket_addr_peer.set_port(port_advertized);
-        if rpc_check(socket_addr_peer, timeout_duration, client).await {
-            return Some(port_advertized);
-        }
-    }
-    // if the advertized port was not functional or there was no advertized port, check the given ports
-    let mut ports_stream = check_ports(addr, ports, timeout_duration).await;
-    while let Some(port) = ports_stream.next().await {
-        let mut socket_addr_peer = addr;
-        socket_addr_peer.set_port(port);
-        if rpc_check(socket_addr_peer, timeout_duration, client).await {
-            return Some(port);
-        }
-    }
-    None
-}
-/// P2P messages does not contains a publicized zmq port.
-/// The port is checked before sending a request to verify that the service is responding
-async fn is_zmq_capable(
-    addr: SocketAddr,
-    ports: &[u16],
-    timeout_duration: Duration,
-) -> Option<u16> {
-    let mut ports_stream = check_ports(addr, ports, timeout_duration).await;
-    while let Some(port) = ports_stream.next().await {
-        let mut socket_addr_peer = addr;
-        socket_addr_peer.set_port(port);
-        if zmq_check(socket_addr_peer, timeout_duration).await {
-            return Some(port);
-        }
-    }
-    None
-}
-#[cfg(feature = "rpc")]
-async fn rpc_check(
-    socket_peer: SocketAddr,
-    timeout_duration: Duration,
-    client: &reqwest::Client,
-) -> bool {
-    let request_rpc = client
-        .post(
-            "http://".to_string()
-                + &socket_peer.ip().to_string()
-                + ":"
-                + &socket_peer.port().to_string()
-                + "/json_rpc",
-        )
-        .body(r#"{"jsonrpc":"2.0","id":"0","method":"get_info"}"#);
-    let resp = timeout(timeout_duration, request_rpc.send()).await;
-    if resp
-        .as_ref()
-        .ok()
-        .is_some_and(|e| e.as_ref().ok().is_some_and(|r| r.status().is_success()))
-    {
-        return true;
-    }
-    false
-}
-async fn zmq_check(socket_peer: SocketAddr, timeout_duration: Duration) -> bool {
-    let mut req_socket = zeromq::ReqSocket::new();
-
-    if let Ok(res) = timeout(
-        timeout_duration,
-        req_socket.connect(&format!(
-            "tcp://{}:{}",
-            socket_peer.ip(),
-            socket_peer.port()
-        )),
-    )
-    .await
-    {
-        // current rust native zmq lib doesn't not connect well, but the error message for nodes with zmq-pub enabled is different than the ones without
-        if let Err(e) = res
-            && let ZmqError::Other(msg) = e
-            && msg == "Provided sockets combination is not compatible"
-        {
-            return true;
-        }
-    }
-    false
-}
-
-async fn is_latency_capable(
-    socket: SocketAddr,
-    timeout_duration: Duration,
-    max: u32,
-) -> Option<u32> {
-    let now = Instant::now();
-    if (timeout(timeout_duration, tokio::net::TcpStream::connect(socket)).await).is_ok() {
-        let ms = now.elapsed().as_millis() as u32;
-        if ms <= max {
-            return Some(ms);
-        }
-    }
-    None
-}
-
-async fn request_book_node(
-    addr: SocketAddr,
+fn crawl_peers(
+    addrs: Vec<SocketAddr>,
     timeout_duration: Duration,
     connection_limit: Arc<Semaphore>,
-    peers_channel: Arc<Sender<(SocketAddr, Client<ClearNet>)>>,
-) -> Result<(), tower::BoxError> {
-    let _guard = connection_limit.acquire().await.unwrap();
-    let mut connector = CONNECTOR.get().unwrap().clone();
-    let peer = timeout(
-        timeout_duration,
-        connector
-            .ready()
-            .await?
-            .call(ConnectRequest { addr, permit: None }),
-    )
-    .await??;
-    peers_channel.send((addr, peer)).await?;
-    Ok(())
-}
-
-#[derive(Clone, Debug)]
-struct AddressBookService {
-    timeout: Duration,
-    connections_limit: Arc<Semaphore>,
-    peers_channel: Arc<Sender<(SocketAddr, Client<ClearNet>)>>,
-}
-
-impl Service<AddressBookRequest<ClearNet>> for AddressBookService {
-    type Error = tower::BoxError;
-    type Response = AddressBookResponse<ClearNet>;
-    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
-
-    fn poll_ready(&mut self, _: &mut std::task::Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, req: AddressBookRequest<ClearNet>) -> Self::Future {
-        let duration = self.timeout;
-        let connections_limit = &self.connections_limit;
-        let peers_channel = self.peers_channel.clone();
-        enc!((duration, connections_limit, peers_channel) async move {
-            match req {
-                AddressBookRequest::IncomingPeerList(_, peers) => {
-                    for mut peer in peers {
-                        peer.adr.make_canonical();
-                        if SCANNED_NODES.insert(peer.adr) {
-                            tokio::spawn(enc!((duration, connections_limit, peers_channel) async move {
-                                if request_book_node(peer.adr, duration, connections_limit, peers_channel).await.is_err() {
-                                    SCANNED_NODES.remove(&peer.adr);
-                                }
-                            }));
+    peers_channel: Arc<Sender<(SocketAddr, HandshakeResponse)>>,
+    scanned_nodes: Arc<DashSet<SocketAddr>>,
+    core_sync_data: CoreSyncData,
+    basic_node_data: BasicNodeData,
+) {
+    for addr in addrs {
+        if !scanned_nodes.insert(addr) {
+            // do we need to remove from a dashset ? does the dashset insert duplicates ?
+            scanned_nodes.remove(&addr);
+            return;
+        }
+        // for each addr, fetch the peer data. If successful, add them to the peer channel
+        // there is a clone of value here
+        tokio::spawn(
+            enc!((connection_limit, basic_node_data, core_sync_data, peers_channel, scanned_nodes) async move {
+            let guard = connection_limit.acquire().await.unwrap();
+                    let peer = timeout(
+                        timeout_duration,
+                        fetch_peer(&addr, core_sync_data.clone(), basic_node_data.clone()),
+                    )
+                    .await.ok()??;
+                    peers_channel.send((addr, peer.clone())).await.unwrap();
+                    // this might cause some computing
+                    let addrs = peer
+                        .local_peerlist_new
+                        .iter()
+                        .filter_map(|p| {
+                            if let NetworkAddress::Clear(socket) = p.adr {
+                                Some(socket)
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<SocketAddr>>();
+                        {
+                            drop(guard);
+                        crawl_peers(
+                            addrs,
+                            timeout_duration,
+                            connection_limit,
+                            peers_channel,
+                            scanned_nodes,
+                            core_sync_data,
+                            basic_node_data,
+                        );
                         }
-                    }
-
-                    Ok(AddressBookResponse::Ok)
-                }
-                AddressBookRequest::NewConnection { .. } => Ok(AddressBookResponse::Ok),
-                AddressBookRequest::GetWhitePeers(_) => Ok(AddressBookResponse::Peers(vec![])),
-                _ => Err("no peers".into()),
-            }
-        })
-        .boxed()
+            None::<()>
+                }),
+        );
     }
 }

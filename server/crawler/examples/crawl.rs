@@ -1,7 +1,7 @@
+use monero_crawler_lib::{CrawlBuilder, capability_checkers::CapabilitiesChecker};
 use std::{fs::OpenOptions, io::Write};
 
 use futures::StreamExt;
-use monero_crawler_lib::{CapabilitiesChecker, CrawlBuilder};
 
 const ZMQ_PORTS: [u16; 2] = [18083, 18084];
 const RPC_PORTS: [u16; 2] = [18081, 18089];
@@ -25,6 +25,7 @@ async fn main() {
         .unwrap();
     let mut stream = crawler.discover_peers().await;
     while let Some((peer, rpc_port, zmq_port, ms)) = stream.next().await {
+        println!("found a capable node");
         peers_file
             .write_fmt(format_args!("{peer:?}, {rpc_port}, {zmq_port}, {ms}\n"))
             .unwrap();
