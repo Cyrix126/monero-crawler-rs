@@ -103,40 +103,41 @@ impl Crawl {
                                     CapabilitiesChecker::Latency(max) => if let Some(ms) = is_latency_capable(socket, timeout_duration, *max).await {
                                                                     latency = ms;
                                     } else {
-                                        return;
+                                        return None;
                                     }
                                     CapabilitiesChecker::SeedNode(keep_seed) => if SEED_NODES.contains(&socket) {
                                         if !keep_seed {
-                                            return;
+                                            return None;
                                         }
                                     } else if *keep_seed {
-                                        return;
+                                        return None;
                                     }
                                     #[cfg(feature = "rpc")]
                                     CapabilitiesChecker::Rpc(ports) => {
                                         if let Some(port) = is_rpc_capable(socket, peer.node_data.rpc_port, ports, timeout_duration, &client).await {
                                             rpc_port = port;
                                     } else {
-                                        return;
+                                        return None;
 
                                     }}
                                     #[cfg(feature = "zmq")]
                                     CapabilitiesChecker::Zmq(ports) => if let Some(port) = is_zmq_capable(socket, ports, timeout_duration).await {
                                         zmq_port = port;
                                     } else {
-                                        return;
+                                        return None;
                                     }
                                     CapabilitiesChecker::ChainSynced(chain_height) => {
                                         if !is_blockchain_synced(&peer.payload_data, chain_height.clone()).await {
-                                        return;
+                                        return None;
                                     }
                                         }
                                     CapabilitiesChecker::SpyNode(keep_only_spynode, blacklist) => if !is_spynode(&socket, &peer,  blacklist).await.is_some_and(|r|r)  && *keep_only_spynode {
-                                            return;
+                                            return None;
                                     }
                                 }
                             }
-                                capable_peers_tx.send((socket, rpc_port, zmq_port, latency)).await.unwrap();
+                                capable_peers_tx.send((socket, rpc_port, zmq_port, latency)).await.ok()?;
+                                None::<()>
                         }),
                     );
                 }
@@ -166,13 +167,13 @@ fn crawl_peers(
         // there is a clone of value here
         tokio::spawn(
             enc!((connection_limit, basic_node_data, core_sync_data, peers_channel, scanned_nodes) async move {
-            let guard = connection_limit.acquire().await.unwrap();
+            let guard = connection_limit.acquire().await.ok()?;
                     let peer = timeout(
                         timeout_duration,
                         fetch_peer(&addr, core_sync_data.clone(), basic_node_data.clone()),
                     )
                     .await.ok()??;
-                    peers_channel.send((addr, peer.clone())).await.unwrap();
+                    peers_channel.send((addr, peer.clone())).await.ok()?;
                     // this might cause some computing
                     let addrs = peer
                         .local_peerlist_new
