@@ -35,7 +35,7 @@ Crawl the monero node network and gather data about the existing nodes.
 
 If you'd like to thank me for the development of monero-crawler-rs and/or motivate me to improve it you're welcome to send any amount of XMR to the following address:
 
-![QR CODE DONATION ADDRESS](assets/qr_donation.png)
+![QR CODE DONATION ADDRESS](assets/donation_qr.png)
 
 ```
 8Bhws7zfT7nWhMNCZzBNj7UEJzY1Sw24LMxE629fUnvGgk8DDtwS6S33HPJDFNu6YX1H3azxuCDWbHU8uz8XbwzkSkey6V4
